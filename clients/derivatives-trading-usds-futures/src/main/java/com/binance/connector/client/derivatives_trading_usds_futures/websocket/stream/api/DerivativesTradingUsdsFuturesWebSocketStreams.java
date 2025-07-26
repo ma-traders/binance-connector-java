@@ -49,6 +49,8 @@ import com.binance.connector.client.derivatives_trading_usds_futures.websocket.s
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.UserDataStreamEventsResponse;
 import com.google.gson.reflect.TypeToken;
 import java.util.Collections;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -197,6 +199,53 @@ public class DerivativesTradingUsdsFuturesWebSocketStreams {
     public StreamBlockingQueueWrapper<PartialBookDepthStreamsResponse> partialBookDepthStreams(
             PartialBookDepthStreamsRequest partialBookDepthStreamsRequest) throws ApiException {
         return websocketMarketStreamsApi.partialBookDepthStreams(partialBookDepthStreamsRequest);
+    }
+
+    /**
+     * Subscribes to combined public market data streams.
+     * 
+     * @param streamNames - Collection of stream names to subscribe to (e.g., "btcusdt@aggTrade", "ethusdt@ticker")
+     * @return A WebSocket stream handler for the combined streams returning raw String data
+     * @throws ApiException if the stream names are null or empty
+     */
+    public StreamBlockingQueueWrapper<String> combinedStreams(Collection<String> streamNames) throws ApiException {
+        if (streamNames == null || streamNames.isEmpty()) {
+            throw new ApiException("Stream names cannot be null or empty");
+        }
+        
+        Set<String> streamSet = new HashSet<>(streamNames);
+        RequestWrapperDTO<Set<String>, Object> requestWrapperDTO =
+                new RequestWrapperDTO.Builder<Set<String>, Object>()
+                        .id(getRequestID())
+                        .method("SUBSCRIBE")
+                        .params(streamSet)
+                        .build();
+        
+        Map<String, StreamBlockingQueue<String>> queuesMap =
+                connection.subscribe(requestWrapperDTO);
+        
+        // For combined streams, the WebSocket connection manager creates individual queues for each stream
+        // We'll return the first queue as they all receive data from the same WebSocket connection
+        // The consumer will need to parse the stream field in the JSON to distinguish between streams
+        StreamBlockingQueue<String> queue = queuesMap.values().iterator().next();
+        
+        // Return raw String wrapper without type conversion
+        TypeToken<String> typeToken = new TypeToken<String>() {};
+        return new StreamBlockingQueueWrapper<>(queue, typeToken, JSON.getGson());
+    }
+
+    /**
+     * Subscribes to combined public market data streams.
+     * 
+     * @param streamNames - Array of stream names to subscribe to (e.g., "btcusdt@aggTrade", "ethusdt@ticker")
+     * @return A WebSocket stream handler for the combined streams returning raw String data
+     * @throws ApiException if the stream names are null or empty
+     */
+    public StreamBlockingQueueWrapper<String> combinedStreams(String... streamNames) throws ApiException {
+        if (streamNames == null || streamNames.length == 0) {
+            throw new ApiException("Stream names cannot be null or empty");
+        }
+        return combinedStreams(Set.of(streamNames));
     }
 
     /**
