@@ -224,14 +224,55 @@ public class DerivativesTradingUsdsFuturesWebSocketStreams {
         Map<String, StreamBlockingQueue<String>> queuesMap =
                 connection.subscribe(requestWrapperDTO);
         
-        // For combined streams, the WebSocket connection manager creates individual queues for each stream
-        // We'll return the first queue as they all receive data from the same WebSocket connection
-        // The consumer will need to parse the stream field in the JSON to distinguish between streams
-        StreamBlockingQueue<String> queue = queuesMap.values().iterator().next();
+        // Create a multiplexing queue that aggregates messages from all individual stream queues
+        // This is necessary because StreamConnectionWrapper routes messages to individual queues
+        // based on the "stream" field, but we want all messages in a single combined queue
+        StreamBlockingQueue<String> combinedQueue = createCombinedQueue(queuesMap);
         
         // Return raw String wrapper without type conversion
         TypeToken<String> typeToken = new TypeToken<String>() {};
-        return new StreamBlockingQueueWrapper<>(queue, typeToken, JSON.getGson());
+        return new StreamBlockingQueueWrapper<>(combinedQueue, typeToken, JSON.getGson());
+    }
+    
+    /**
+     * Creates a combined queue that multiplexes messages from individual stream queues
+     * into a single output queue for combined streams functionality.
+     */
+    private StreamBlockingQueue<String> createCombinedQueue(Map<String, StreamBlockingQueue<String>> individualQueues) {
+        // Create the output queue for combined messages
+        java.util.concurrent.LinkedBlockingDeque<String> outputQueue = new java.util.concurrent.LinkedBlockingDeque<>();
+        String combinedStreamId = "combined_" + getRequestID();
+        StreamBlockingQueue<String> combinedQueue = new StreamBlockingQueue<>(outputQueue, combinedStreamId);
+        
+        // Start background threads to multiplex messages from individual queues to the combined queue
+        for (Map.Entry<String, StreamBlockingQueue<String>> entry : individualQueues.entrySet()) {
+            String streamName = entry.getKey();
+            StreamBlockingQueue<String> individualQueue = entry.getValue();
+            
+            // Start a daemon thread to forward messages from individual queue to combined queue
+            Thread multiplexer = new Thread(() -> {
+                try {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        try {
+                            String message = individualQueue.take();
+                            // Forward the message to the combined queue
+                            combinedQueue.offer(message);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                } catch (Exception e) {
+                    // Log error but don't stop the thread completely
+                    System.err.println("Error in stream multiplexer for " + streamName + ": " + e.getMessage());
+                }
+            });
+            multiplexer.setDaemon(true);
+            multiplexer.setName("stream-multiplexer-" + streamName);
+            multiplexer.start();
+        }
+        
+        return combinedQueue;
     }
 
     /**
